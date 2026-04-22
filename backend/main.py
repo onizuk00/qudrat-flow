@@ -1,21 +1,16 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import os
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import sys
 from pathlib import Path
 
-# إضافة المجلد الرئيسي للمشروع إلى sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-# استيراد الدوال من الملفات الأخرى (مع async)
-from backend.database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
-from backend.scraper import extract_google_form_data  # هذه أصبحت async
+# استيراد الدوال من الملفات الأخرى
+from database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
+from scraper import extract_google_form_data
 
 # تهيئة قاعدة البيانات
 init_db()
@@ -45,18 +40,14 @@ class SubmitRequest(BaseModel):
 
 @app.post("/api/scrape")
 async def scrape_google_form(request: ScrapeRequest):
-    """استخراج بيانات Google Form بشكل غير متزامن (سريع جداً)"""
     try:
-        # هنا الفرق: نستخدم await لأن الدالة أصبحت غير متزامنة
         form_data = await extract_google_form_data(request.url)
-        
         test_id = save_test(
             title=form_data['title'],
             url=request.url,
             reading_passage=form_data.get('reading_passage', ''),
             questions_data=form_data['questions']
         )
-        
         return {
             "test_id": test_id,
             "title": form_data['title'],
@@ -101,11 +92,9 @@ async def get_mistakes(test_id: Optional[int] = None):
 async def retest_mistakes(test_id: int):
     wrong_question_ids = get_distinct_wrong_question_ids(test_id)
     if not wrong_question_ids:
-        raise HTTPException(status_code=404, detail="No mistakes found for this test")
+        raise HTTPException(status_code=404, detail="No mistakes found")
     questions = get_questions_by_ids(wrong_question_ids)
     test = get_test_by_id(test_id)
-    if not test:
-        raise HTTPException(status_code=404, detail="Test not found")
     return {
         "id": test_id,
         "title": f"{test['title']} (Mistakes Only)",
@@ -115,22 +104,31 @@ async def retest_mistakes(test_id: int):
     }
 
 # ------------------- خدمة الملفات الثابتة (Frontend) -------------------
-static_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-if static_dir.exists() and static_dir.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+# تحديد المسار الصحيح لمجلد frontend/dist
+current_dir = Path(__file__).resolve().parent
+frontend_dist = current_dir.parent / "frontend" / "dist"
+
+print(f"Looking for frontend at: {frontend_dist}")
+print(f"Exists: {frontend_dist.exists()}")
+
+if frontend_dist.exists() and frontend_dist.is_dir():
+    # خدمة الملفات الثابتة
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
     
     @app.get("/")
     async def serve_root():
-        return FileResponse(str(static_dir / "index.html"))
+        return FileResponse(str(frontend_dist / "index.html"))
     
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404)
-        file_path = static_dir / full_path
+        file_path = frontend_dist / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
-        return FileResponse(str(static_dir / "index.html"))
+        return FileResponse(str(frontend_dist / "index.html"))
+else:
+    print("WARNING: Frontend dist not found! API will work but UI won't.")
 
 # ------------------- منع السكون (Keep-Alive) -------------------
 @app.on_event("startup")
@@ -138,9 +136,8 @@ async def startup_event():
     asyncio.create_task(keep_alive())
 
 async def keep_alive():
-    """إرسال طلب لنفسك كل 14 دقيقة لمنع سكون Render"""
     while True:
-        await asyncio.sleep(840)  # 14 دقيقة
+        await asyncio.sleep(840)
         try:
             import httpx
             async with httpx.AsyncClient() as client:
