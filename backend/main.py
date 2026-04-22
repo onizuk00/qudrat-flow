@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+# أضف المجلد الرئيسي للمشروع إلى sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
