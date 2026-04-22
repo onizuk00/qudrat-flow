@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Dict, Optional
@@ -8,7 +8,6 @@ import os
 import asyncio
 from pathlib import Path
 
-# التعديل الجوهري هنا: استخدام المسار الكامل من backend
 from backend.database import (
     init_db, create_user, get_user_by_username, get_user_by_email,
     get_all_tests_for_user, get_test_by_id, save_test,
@@ -48,32 +47,44 @@ class UserCreate(BaseModel):
 # -------------------- AUTHENTICATION --------------------
 @app.post("/api/register")
 async def register(user: UserCreate):
-    if get_user_by_username(user.username):
-        raise HTTPException(400, "Username already registered")
-    if get_user_by_email(user.email):
-        raise HTTPException(400, "Email already registered")
-    hashed = get_password_hash(user.password)
-    user_id = create_user(user.username, user.email, hashed)
-    token = create_access_token(data={"sub": str(user_id)})
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user_id": user_id,
-        "username": user.username
-    }
+    try:
+        if get_user_by_username(user.username):
+            raise HTTPException(400, "اسم المستخدم موجود مسبقاً")
+        if get_user_by_email(user.email):
+            raise HTTPException(400, "البريد الإلكتروني موجود مسبقاً")
+        hashed = get_password_hash(user.password)
+        user_id = create_user(user.username, user.email, hashed)
+        token = create_access_token(data={"sub": str(user_id)})
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user_id": user_id,
+            "username": user.username
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Registration error: {e}")
+        raise HTTPException(500, f"خطأ داخلي: {str(e)}")
 
 @app.post("/api/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(400, "Incorrect username or password")
-    token = create_access_token(data={"sub": str(user['id'])})
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user_id": user['id'],
-        "username": user['username']
-    }
+    try:
+        user = authenticate_user(form_data.username, form_data.password)
+        if not user:
+            raise HTTPException(400, "اسم المستخدم أو كلمة المرور غير صحيحة")
+        token = create_access_token(data={"sub": str(user['id'])})
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user_id": user['id'],
+            "username": user['username']
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Login error: {e}")
+        raise HTTPException(500, f"خطأ داخلي: {str(e)}")
 
 @app.get("/api/users/me")
 async def me(current_user: dict = Depends(get_current_user)):
@@ -82,16 +93,19 @@ async def me(current_user: dict = Depends(get_current_user)):
 # -------------------- API ENDPOINTS --------------------
 @app.post("/api/scrape")
 async def scrape(req: ScrapeRequest, current_user: dict = Depends(get_current_user)):
-    data = await extract_google_form_data(req.url)
-    test_id = save_test(
-        data['title'], req.url, data.get('reading_passage', ''),
-        data['questions'], current_user['id']
-    )
-    return {
-        "test_id": test_id,
-        "title": data['title'],
-        "question_count": len(data['questions'])
-    }
+    try:
+        data = await extract_google_form_data(req.url)
+        test_id = save_test(
+            data['title'], req.url, data.get('reading_passage', ''),
+            data['questions'], current_user['id']
+        )
+        return {
+            "test_id": test_id,
+            "title": data['title'],
+            "question_count": len(data['questions'])
+        }
+    except Exception as e:
+        raise HTTPException(400, str(e))
 
 @app.get("/api/tests")
 async def tests(current_user: dict = Depends(get_current_user)):
@@ -115,7 +129,7 @@ async def submit(req: SubmitRequest, current_user: dict = Depends(get_current_us
 async def history(current_user: dict = Depends(get_current_user)):
     return get_test_history_for_user(current_user['id'])
 
-# -------------------- HTML PAGES --------------------
+# -------------------- SIMPLE HTML UI --------------------
 LOGIN_PAGE_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -154,7 +168,8 @@ LOGIN_PAGE_HTML = """
             setTimeout(()=>d.classList.add('hidden'),3000);
         }
         async function login(){
-            let u=document.getElementById('username').value,p=document.getElementById('password').value;
+            let u=document.getElementById('username').value;
+            let p=document.getElementById('password').value;
             let fd=new URLSearchParams();
             fd.append('username',u);
             fd.append('password',p);
@@ -166,11 +181,18 @@ LOGIN_PAGE_HTML = """
                     localStorage.setItem('username',data.username);
                     showMessage('✅ تم تسجيل الدخول بنجاح!',false);
                     setTimeout(()=>window.location.href='/dashboard',1000);
-                }else showMessage(data.detail||'فشل تسجيل الدخول');
-            }catch(e){showMessage('خطأ في الاتصال');}
+                }else{
+                    showMessage(data.detail||'فشل تسجيل الدخول');
+                }
+            }catch(e){
+                console.error(e);
+                showMessage('خطأ في الاتصال: '+e.message);
+            }
         }
         async function register(){
-            let u=document.getElementById('reg-username').value,e=document.getElementById('reg-email').value,p=document.getElementById('reg-password').value;
+            let u=document.getElementById('reg-username').value;
+            let e=document.getElementById('reg-email').value;
+            let p=document.getElementById('reg-password').value;
             try{
                 let res=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,email:e,password:p})});
                 let data=await res.json();
@@ -179,8 +201,13 @@ LOGIN_PAGE_HTML = """
                     localStorage.setItem('username',data.username);
                     showMessage('✅ تم إنشاء الحساب بنجاح!',false);
                     setTimeout(()=>window.location.href='/dashboard',1000);
-                }else showMessage(data.detail||'فشل إنشاء الحساب');
-            }catch(e){showMessage('خطأ في الاتصال');}
+                }else{
+                    showMessage(data.detail||'فشل إنشاء الحساب');
+                }
+            }catch(e){
+                console.error(e);
+                showMessage('خطأ في الاتصال: '+e.message);
+            }
         }
         function showRegister(){document.getElementById('login-form').style.display='none';document.getElementById('register-form').style.display='block';}
         function showLogin(){document.getElementById('register-form').style.display='none';document.getElementById('login-form').style.display='block';}
@@ -215,7 +242,7 @@ DASHBOARD_HTML = """
         const token=localStorage.getItem('token');
         if(!token)window.location.href='/login-page';
         fetch('/api/users/me',{headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(user=>{document.getElementById('user-info').innerHTML=`<strong class="text-white">${user.username}</strong> <span class="text-gray-300">(${user.email})</span>`;}).catch(()=>window.location.href='/login-page');
-        fetch('/api/tests',{headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(tests=>{let div=document.getElementById('tests-list');if(tests.length===0)div.innerHTML='<p class="text-gray-300">لا توجد اختبارات بعد. أضف اختباراً عبر واجهة React لاحقاً.</p>';else tests.forEach(t=>{div.innerHTML+=`<div class="bg-white/5 border border-white/10 rounded-xl p-3 text-white">${t.title}</div>`;});});
+        fetch('/api/tests',{headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(tests=>{let div=document.getElementById('tests-list');if(tests.length===0)div.innerHTML='<p class="text-gray-300">لا توجد اختبارات بعد.</p>';else tests.forEach(t=>{div.innerHTML+=`<div class="bg-white/5 border border-white/10 rounded-xl p-3 text-white">${t.title}</div>`;});});
         function logout(){localStorage.removeItem('token');window.location.href='/login-page';}
     </script>
 </body>
@@ -234,7 +261,7 @@ async def login_page():
 async def dashboard():
     return HTMLResponse(content=DASHBOARD_HTML)
 
-# -------------------- KEEP-ALIVE (OPTIONAL) --------------------
+# -------------------- KEEP-ALIVE --------------------
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(keep_alive())
