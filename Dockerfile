@@ -1,4 +1,4 @@
-# مرحلة 1: بناء واجهة React (المُسَمّاة frontend-builder)
+# مرحلة 1: بناء واجهة React
 FROM node:18-slim AS frontend-builder
 
 WORKDIR /frontend
@@ -16,7 +16,7 @@ RUN npm run build
 # مرحلة 2: بناء خادم Python النهائي
 FROM python:3.11-slim
 
-# تثبيت المتطلبات الأساسية (بما فيها g++ و Playwright)
+# تثبيت المتطلبات الأساسية
 RUN apt-get update && apt-get install -y \
     g++ \
     wget \
@@ -31,7 +31,11 @@ RUN apt-get update && apt-get install -y \
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# تعيين مسار العمل إلى المجلد الرئيسي للتطبيق
 WORKDIR /app
+
+# تعيين PYTHONPATH ليشمل المجلد الحالي
+ENV PYTHONPATH=/app
 
 # نسخ متطلبات Python وتثبيتها
 COPY requirements.txt .
@@ -40,7 +44,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # تثبيت متصفح Playwright
 RUN python -m playwright install chromium
 
-# نسخ كود الخادم (Backend)
+# نسخ كود الخادم (Backend) كاملاً
 COPY backend/ ./backend/
 
 # نسخ ملفات الواجهة المبنية من المرحلة الأولى
@@ -49,5 +53,5 @@ COPY --from=frontend-builder /frontend/dist ./frontend/dist
 # تعيين متغير البيئة للمنفذ
 ENV PORT=10000
 
-# تشغيل الخادم (مع التأكيد على المسار الصحيح لـ main.py)
-CMD cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+# تشغيل الخادم (ملاحظة: الأمر هنا يتغير)
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "10000"]
