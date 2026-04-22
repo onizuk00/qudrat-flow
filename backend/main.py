@@ -1,30 +1,28 @@
-import sys
-from pathlib import Path
-
-# أضف المجلد الرئيسي للمشروع إلى sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional
 import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
-from datetime import datetime, timedelta
-import time
+import sys
+from pathlib import Path
 
+# إضافة المجلد الرئيسي للمشروع إلى sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# استيراد الدوال من الملفات الأخرى (مع async)
 from backend.database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
-from backend.scraper import extract_google_form_data
+from backend.scraper import extract_google_form_data  # هذه أصبحت async
 
-# --- Initialize DB ---
+# تهيئة قاعدة البيانات
 init_db()
 
 app = FastAPI(title="Qudrat-Flow API")
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,30 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Simple Cache for scraped URLs (TTL 1 hour) ---
-scrape_cache = {}
-CACHE_TTL_SECONDS = 3600
-
-def get_cached_scrape(url: str):
-    if url in scrape_cache:
-        entry = scrape_cache[url]
-        if datetime.now() - entry['timestamp'] < timedelta(seconds=CACHE_TTL_SECONDS):
-            return entry['data']
-        else:
-            del scrape_cache[url]
-    return None
-
-def set_cached_scrape(url: str, data):
-    scrape_cache[url] = {'data': data, 'timestamp': datetime.now()}
-
-# --- Background task for scraping ---
-executor = ThreadPoolExecutor(max_workers=2)
-
-async def run_scrape(url: str):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, extract_google_form_data, url)
-
-# --- Models ---
+# نماذج البيانات
 class ScrapeRequest(BaseModel):
     url: str
 
@@ -66,42 +41,27 @@ class SubmitRequest(BaseModel):
     time_limit_seconds: int
     answers: Dict[str, int]
 
-# --- API Endpoints ---
-@app.get("/api/ping")
-async def ping():
-    """Endpoint to keep the service alive."""
-    return {"status": "alive", "timestamp": time.time()}
+# ------------------- API Endpoints -------------------
 
 @app.post("/api/scrape")
-async def scrape_google_form(request: ScrapeRequest, background_tasks: BackgroundTasks):
-    # Check cache first
-    cached = get_cached_scrape(request.url)
-    if cached:
-        # save to DB and return
-        test_id = save_test(
-            title=cached['title'],
-            url=request.url,
-            reading_passage=cached.get('reading_passage', ''),
-            questions_data=cached['questions']
-        )
-        return {"test_id": test_id, "title": cached['title'], "question_count": len(cached['questions']), "cached": True}
-    
-    # Otherwise scrape in background (but we need to wait for result? Better to scrape async with timeout)
-    # For simplicity, we'll scrape directly but with timeout and speed optimizations.
-    # To avoid long wait, we can use a task and return a job ID, but for MVP let's keep direct with increased timeout.
+async def scrape_google_form(request: ScrapeRequest):
+    """استخراج بيانات Google Form بشكل غير متزامن (سريع جداً)"""
     try:
-        form_data = await asyncio.wait_for(run_scrape(request.url), timeout=45.0)
-        # Cache it
-        set_cached_scrape(request.url, form_data)
+        # هنا الفرق: نستخدم await لأن الدالة أصبحت غير متزامنة
+        form_data = await extract_google_form_data(request.url)
+        
         test_id = save_test(
             title=form_data['title'],
             url=request.url,
             reading_passage=form_data.get('reading_passage', ''),
             questions_data=form_data['questions']
         )
-        return {"test_id": test_id, "title": form_data['title'], "question_count": len(form_data['questions']), "cached": False}
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="استغرقت عملية الاستخراج أكثر من 45 ثانية. الرابط قد يكون معقداً أو بطيئاً.")
+        
+        return {
+            "test_id": test_id,
+            "title": form_data['title'],
+            "question_count": len(form_data['questions'])
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -139,10 +99,10 @@ async def get_mistakes(test_id: Optional[int] = None):
 
 @app.post("/api/retest/{test_id}")
 async def retest_mistakes(test_id: int):
-    wrong_ids = get_distinct_wrong_question_ids(test_id)
-    if not wrong_ids:
-        raise HTTPException(status_code=404, detail="No mistakes found")
-    questions = get_questions_by_ids(wrong_ids)
+    wrong_question_ids = get_distinct_wrong_question_ids(test_id)
+    if not wrong_question_ids:
+        raise HTTPException(status_code=404, detail="No mistakes found for this test")
+    questions = get_questions_by_ids(wrong_question_ids)
     test = get_test_by_id(test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
@@ -154,22 +114,40 @@ async def retest_mistakes(test_id: int):
         "is_retest": True
     }
 
-# Serve frontend static files
-static_dir = "../frontend/dist"
-if os.path.exists(static_dir):
-    app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
+# ------------------- خدمة الملفات الثابتة (Frontend) -------------------
+static_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if static_dir.exists() and static_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+    
     @app.get("/")
     async def serve_root():
-        return FileResponse(f"{static_dir}/index.html")
+        return FileResponse(str(static_dir / "index.html"))
+    
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404)
-        file_path = f"{static_dir}/{full_path}"
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(f"{static_dir}/index.html")
+        file_path = static_dir / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(static_dir / "index.html"))
+
+# ------------------- منع السكون (Keep-Alive) -------------------
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(keep_alive())
+
+async def keep_alive():
+    """إرسال طلب لنفسك كل 14 دقيقة لمنع سكون Render"""
+    while True:
+        await asyncio.sleep(840)  # 14 دقيقة
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                await client.get(f"http://localhost:{os.getenv('PORT', 8000)}/api/tests")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, workers=2)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
