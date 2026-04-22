@@ -48,4 +48,4 @@ COPY --from=frontend-builder /frontend/dist ./frontend/dist
 ENV PORT=10000
 
 # تشغيل الخادم
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+CMD uvicorn backend.main:app --host 0.0.0.0 --port $PORT
