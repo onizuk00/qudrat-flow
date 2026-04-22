@@ -139,21 +139,30 @@ async def retest_mistakes(test_id: int):
     }
 
 # Serve React Frontend (after build)
-# Check if static files exist, otherwise serve API only
-static_dir = "../frontend/dist"
-if os.path.exists(static_dir):
-    app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
+import os
+import pathlib
+
+# Get the absolute path to the frontend/dist directory
+current_file = pathlib.Path(__file__).resolve()
+backend_dir = current_file.parent
+project_root = backend_dir.parent
+static_dir = project_root / "frontend" / "dist"
+
+if static_dir.exists() and static_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
     
     @app.get("/")
     async def serve_root():
-        return FileResponse(f"{static_dir}/index.html")
+        return FileResponse(str(static_dir / "index.html"))
     
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # Don't interfere with API routes
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404)
-        return FileResponse(f"{static_dir}/index.html")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        file_path = static_dir / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(static_dir / "index.html"))
+else:
+    print(f"Warning: Frontend build not found at {static_dir}")
