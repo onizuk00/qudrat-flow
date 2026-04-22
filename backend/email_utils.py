@@ -1,9 +1,10 @@
 import smtplib
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import os
 
-SMTP_SERVER = "smtp.gmail.com"  # أو smtp.office365.com أو smtp.mail.yahoo.com
+# إعدادات SMTP (يمكنك تغييرها حسب مزود البريد)
+SMTP_SERVER = "smtp.gmail.com"  # لـ Gmail
 SMTP_PORT = 587
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "your-email@gmail.com")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "your-app-password")
@@ -38,6 +39,7 @@ def send_reset_email(recipient_email: str, reset_code: str):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
+        print(f"Reset email sent to {recipient_email}")
     except Exception as e:
         print(f"Error sending email: {e}")
         raise
