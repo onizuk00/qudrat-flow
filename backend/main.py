@@ -8,9 +8,14 @@ import os
 import asyncio
 from pathlib import Path
 
-from database import init_db, create_user, get_user_by_username, get_user_by_email, get_all_tests_for_user, get_test_by_id, save_test, save_session_results, get_test_history_for_user
-from scraper import extract_google_form_data
-from auth import get_password_hash, authenticate_user, create_access_token, get_current_user
+# التعديل الجوهري هنا: استخدام المسار الكامل من backend
+from backend.database import (
+    init_db, create_user, get_user_by_username, get_user_by_email,
+    get_all_tests_for_user, get_test_by_id, save_test,
+    save_session_results, get_test_history_for_user
+)
+from backend.scraper import extract_google_form_data
+from backend.auth import get_password_hash, authenticate_user, create_access_token, get_current_user
 
 # -------------------- INIT --------------------
 init_db()
@@ -78,7 +83,10 @@ async def me(current_user: dict = Depends(get_current_user)):
 @app.post("/api/scrape")
 async def scrape(req: ScrapeRequest, current_user: dict = Depends(get_current_user)):
     data = await extract_google_form_data(req.url)
-    test_id = save_test(data['title'], req.url, data.get('reading_passage', ''), data['questions'], current_user['id'])
+    test_id = save_test(
+        data['title'], req.url, data.get('reading_passage', ''),
+        data['questions'], current_user['id']
+    )
     return {
         "test_id": test_id,
         "title": data['title'],
@@ -98,7 +106,10 @@ async def get_test(test_id: int, current_user: dict = Depends(get_current_user))
 
 @app.post("/api/submit")
 async def submit(req: SubmitRequest, current_user: dict = Depends(get_current_user)):
-    return save_session_results(req.test_id, req.time_spent_seconds, req.answers, req.time_limit_seconds, current_user['id'])
+    return save_session_results(
+        req.test_id, req.time_spent_seconds, req.answers,
+        req.time_limit_seconds, current_user['id']
+    )
 
 @app.get("/api/history")
 async def history(current_user: dict = Depends(get_current_user)):
