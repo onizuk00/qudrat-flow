@@ -13,7 +13,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/token")
 
 def get_password_hash(password: str) -> str:
-    """توليد تجزئة باستخدام werkzeug (لا يوجد حد 72 بايت)"""
+    """توليد تجزئة آمنة (لا يوجد حد 72 بايت)"""
     return generate_password_hash(password, method='pbkdf2:sha256:600000')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
