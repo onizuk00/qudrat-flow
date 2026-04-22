@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse  # <-- تمت الإضافة
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Dict, Optional
@@ -55,7 +55,6 @@ class UserCreate(BaseModel):
 
 @app.post("/api/register")
 async def register(user_data: UserCreate):
-    # Check if user exists
     if get_user_by_username(user_data.username):
         raise HTTPException(status_code=400, detail="Username already registered")
     if get_user_by_email(user_data.email):
@@ -106,16 +105,13 @@ async def login_page():
     <body class="bg-gradient-to-br from-blue-50 to-teal-50 min-h-screen flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
             <h1 class="text-3xl font-bold text-center text-blue-700 mb-6">🔐 قدرات فلو</h1>
-            
             <div id="message" class="mb-4 text-center text-sm hidden"></div>
-            
             <div id="login-form">
                 <input type="text" id="username" placeholder="اسم المستخدم" class="w-full p-3 border rounded-lg mb-3 text-right">
                 <input type="password" id="password" placeholder="كلمة المرور" class="w-full p-3 border rounded-lg mb-4 text-right">
                 <button onclick="login()" class="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700 transition">تسجيل الدخول</button>
                 <p class="text-center text-gray-500 mt-4">ليس لديك حساب؟ <a href="#" onclick="showRegister()" class="text-blue-600">إنشاء حساب</a></p>
             </div>
-
             <div id="register-form" style="display:none;">
                 <input type="text" id="reg-username" placeholder="اسم المستخدم" class="w-full p-3 border rounded-lg mb-3 text-right">
                 <input type="email" id="reg-email" placeholder="البريد الإلكتروني" class="w-full p-3 border rounded-lg mb-3 text-right">
@@ -124,7 +120,6 @@ async def login_page():
                 <p class="text-center text-gray-500 mt-4"><a href="#" onclick="showLogin()" class="text-blue-600">عودة لتسجيل الدخول</a></p>
             </div>
         </div>
-
         <script>
             function showMessage(msg, isError=true) {
                 const msgDiv = document.getElementById('message');
@@ -133,7 +128,6 @@ async def login_page():
                 msgDiv.classList.remove('hidden');
                 setTimeout(() => msgDiv.classList.add('hidden'), 3000);
             }
-
             async function login() {
                 const username = document.getElementById('username').value;
                 const password = document.getElementById('password').value;
@@ -153,7 +147,6 @@ async def login_page():
                     }
                 } catch(e) { showMessage('خطأ في الاتصال'); }
             }
-
             async function register() {
                 const username = document.getElementById('reg-username').value;
                 const email = document.getElementById('reg-email').value;
@@ -171,7 +164,6 @@ async def login_page():
                     }
                 } catch(e) { showMessage('خطأ في الاتصال'); }
             }
-
             function showRegister() { document.getElementById('login-form').style.display='none'; document.getElementById('register-form').style.display='block'; }
             function showLogin() { document.getElementById('register-form').style.display='none'; document.getElementById('login-form').style.display='block'; }
         </script>
@@ -249,7 +241,6 @@ async def get_test(test_id: int, current_user: dict = Depends(get_current_user))
     test = get_test_by_id(test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
-    # Optional: Check if test belongs to user (for extra security)
     return test
 
 @app.post("/api/submit")
@@ -274,8 +265,6 @@ async def get_history(current_user: dict = Depends(get_current_user)):
 async def get_mistakes(test_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     if test_id:
         return get_mistakes_by_test_for_user(test_id, current_user['id'])
-    # If no test_id, return all mistakes across all tests for this user
-    # (You may want to implement a function for that, but for now return empty)
     return []
 
 @app.post("/api/retest/{test_id}")
@@ -365,7 +354,7 @@ async def debug_info(current_user: dict = Depends(get_current_user)):
     
     return info
 
-# ==================== SERVE FRONTEND STATIC FILES ====================
+# ==================== SERVE FRONTEND STATIC FILES (WITH FALLBACK) ====================
 
 current_dir = Path(__file__).resolve().parent.parent
 frontend_dist = current_dir / "frontend" / "dist"
@@ -383,24 +372,24 @@ if frontend_dist.exists() and frontend_dist.is_dir():
         index_file = frontend_dist / "index.html"
         if index_file.exists():
             return FileResponse(str(index_file))
-        # إذا لم توجد الواجهة، انتقل إلى صفحة تسجيل الدخول البسيطة
-        return HTMLResponse(status_code=302, headers={"Location": "/login-page"})
+        # إذا لم يوجد index.html، انتقل إلى صفحة تسجيل الدخول
+        return RedirectResponse(url="/login-page", status_code=302)
     
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # تجنب التعارض مع المسارات الجديدة
         if full_path.startswith("api/") or full_path.startswith("debug") or full_path.startswith("login-page") or full_path.startswith("dashboard"):
             raise HTTPException(status_code=404)
         file_path = frontend_dist / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
+        # لـ Single Page Application: أعد index.html
         return FileResponse(str(frontend_dist / "index.html"))
 else:
-    print("WARNING: Frontend dist not found! Using fallback HTML pages.")
-    # إذا لم توجد الواجهة، نستخدم صفحاتنا البديلة
+    print("WARNING: Frontend dist not found! Redirecting all root requests to /login-page")
+    
     @app.get("/")
     async def root_fallback():
-        return HTMLResponse(status_code=302, headers={"Location": "/login-page"})
+        return RedirectResponse(url="/login-page", status_code=302)
 
 # ==================== KEEP-ALIVE ====================
 
@@ -410,7 +399,7 @@ async def startup_event():
 
 async def keep_alive():
     while True:
-        await asyncio.sleep(840)  # 14 minutes
+        await asyncio.sleep(840)
         try:
             import httpx
             async with httpx.AsyncClient() as client:
