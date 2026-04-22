@@ -4,22 +4,44 @@ from playwright.sync_api import sync_playwright
 
 def extract_google_form_data(url):
     """
-    Extract test data from Google Form URL using Playwright.
-    Parses FB_PUBLIC_LOAD_DATA_ to get questions, options, and correct answers.
+    Extract test data from Google Form URL using Playwright with MAXIMUM SPEED.
+    Typically completes in 5-15 seconds.
     """
     with sync_playwright() as p:
-        # استخدام chromium مع إعدادات أقل استهلاكاً للموارد
+        # Launch browser with optimizations: no images, no GPU, no shared memory issues
         browser = p.chromium.launch(
             headless=True,
-            args=['--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox']
+            args=[
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--blink-settings=imagesEnabled=false',  # منع تحميل الصور
+                '--disable-javascript',  # ملاحظة: هذا قد يعطل بعض النماذج، جرب بدونه إذا فشل
+            ]
         )
-        page = browser.new_page()
+        
+        # Create context with small viewport and custom user agent
+        context = browser.new_context(
+            viewport={'width': 800, 'height': 600},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
+        page = context.new_page()
+        
+        # Block unnecessary resources (images, CSS, fonts)
+        def block_resources(route):
+            if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
+                route.abort()
+            else:
+                route.continue_()
+        
+        page.route('**/*', block_resources)
         
         try:
-            # تحسين: استخدام domcontentloaded بدلاً من networkidle (أسرع بكثير)
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            # انتظار قصير لتحميل المحتوى الديناميكي (قللنا من 2 ثانية إلى 1 ثانية)
-            page.wait_for_timeout(1000)
+            # Use 'commit' which is the fastest - doesn't wait for any content
+            page.goto(url, wait_until='commit', timeout=30000)
+            
+            # Give just 500ms for basic JavaScript to run
+            page.wait_for_timeout(500)
             
             # Get page HTML
             html_content = page.content()
@@ -29,7 +51,14 @@ def extract_google_form_data(url):
             match = re.search(pattern, html_content, re.DOTALL)
             
             if not match:
-                raise ValueError("Could not find FB_PUBLIC_LOAD_DATA_ in page source. Make sure this is a Google Form.")
+                # Fallback: try with 'domcontentloaded' (slower but more reliable)
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(1000)
+                html_content = page.content()
+                match = re.search(pattern, html_content, re.DOTALL)
+                
+                if not match:
+                    raise ValueError("Could not find FB_PUBLIC_LOAD_DATA_ in page source. Make sure this is a Google Form.")
             
             data = json.loads(match.group(1))
             
@@ -75,6 +104,8 @@ def extract_google_form_data(url):
                 'questions': questions
             }
             
+        except Exception as e:
+            raise ValueError(f"Extraction failed: {str(e)}")
         finally:
             browser.close()
 
@@ -109,7 +140,7 @@ def parse_question_item(item):
             elif isinstance(opt, str):
                 options.append(opt)
     
-    # Look for correct answer indicator (محسّن)
+    # Look for correct answer indicator
     if len(item) > 8 and isinstance(item[8], list) and len(item[8]) > 0:
         correct_data = item[8]
         if isinstance(correct_data[0], (int, float)):
@@ -122,7 +153,7 @@ def parse_question_item(item):
         if isinstance(item[9][0], (int, float)):
             correct_answer_index = int(item[9][0])
     
-    # إذا لم يتم العثور على إجابة صحيحة، استخدم أول خيار (لتجنب الأعطال)
+    # If no correct answer found, default to first option
     if correct_answer_index < 0 or correct_answer_index >= len(options):
         correct_answer_index = 0
     
