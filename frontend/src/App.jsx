@@ -1,14 +1,16 @@
 import React from 'react';
-import { Routes, Route, Link } from 'react-router-dom';
-
-function Home() {
-  return <div className="p-8 text-center"><h1 className="text-2xl font-bold">مرحباً بك في قدرات فلو</h1><p>التطبيق يعمل بنجاح 🎉</p></div>;
-}
+import { Routes, Route } from 'react-router-dom';
+import HomePage from './pages/HomePage';
+import TestPage from './pages/TestPage';
+import MistakesPage from './pages/MistakesPage';
 
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<Home />} />
+      <Route path="/" element={<HomePage />} />
+      <Route path="/test/:testId" element={<TestPage />} />
+      <Route path="/retest/:testId" element={<TestPage />} />
+      <Route path="/mistakes/:testId?" element={<MistakesPage />} />
     </Routes>
   );
 }
