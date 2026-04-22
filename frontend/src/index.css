@@ -5,26 +5,46 @@
 @layer base {
   html {
     font-family: 'Tajawal', sans-serif;
+    scroll-behavior: smooth;
   }
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 transition-colors duration-500;
   }
 }
 
 @layer components {
   .question-circle {
-    @apply w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold cursor-pointer transition-all duration-200;
+    @apply w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold cursor-pointer transition-all duration-300 transform hover:scale-110;
   }
   .question-circle-answered {
-    @apply bg-green-500 text-white hover:bg-green-600;
+    @apply bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg hover:shadow-green-500/50;
   }
   .question-circle-pending {
-    @apply bg-gray-300 text-gray-700 hover:bg-gray-400;
+    @apply bg-gradient-to-br from-gray-400 to-gray-500 text-white dark:from-gray-600 dark:to-gray-700 hover:shadow-lg;
   }
   .question-circle-flagged {
-    @apply bg-yellow-500 text-white hover:bg-yellow-600;
+    @apply bg-gradient-to-br from-yellow-500 to-orange-500 text-white shadow-lg hover:shadow-yellow-500/50;
   }
   .timer-danger {
-    @apply text-red-600 animate-pulse;
+    @apply text-red-600 animate-pulse dark:text-red-400;
+  }
+  .glass-card {
+    @apply bg-white/80 dark:bg-gray-800/80 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/50;
+  }
+  .gradient-text {
+    @apply bg-gradient-to-r from-blue-600 to-teal-500 bg-clip-text text-transparent;
+  }
+  .btn-primary {
+    @apply bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-3 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 hover:shadow-lg;
+  }
+  .btn-secondary {
+    @apply bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white font-bold py-2 px-4 rounded-lg transition-all duration-300;
+  }
+  .fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 }
