@@ -9,8 +9,8 @@ import asyncio
 from pathlib import Path
 import sys
 
-# --- إضافة المجلد الرئيسي للمشروع إلى مسار بحث Python ---
-# هذا يضمن أن Python يمكنه رؤية مجلد 'backend' كحزمة
+from backend.database import ...
+from backend.scraper import ...كحزمة
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # --- الآن أصبحت الاستيرادات المطلقة تعمل بشكل صحيح ---
