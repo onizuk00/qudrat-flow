@@ -1,6 +1,8 @@
 FROM python:3.13-slim
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# تثبيت g++ ومكتبات النظام الضرورية للبناء
 RUN apt-get update && apt-get install -y \
+    g++ \
     wget \
     gnupg \
     curl \
@@ -10,9 +12,15 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-0 \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
+
 RUN python -m playwright install chromium
+
 COPY . .
+
 EXPOSE 10000
 CMD cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
