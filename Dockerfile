@@ -23,4 +23,4 @@ RUN python -m playwright install chromium
 COPY . .
 
 EXPOSE 10000
-CMD cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+CMD uvicorn backend.main:app --host 0.0.0.0 --port $PORT
