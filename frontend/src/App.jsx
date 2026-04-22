@@ -3,6 +3,12 @@ import { Routes, Route } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import TestPage from './pages/TestPage';
 import MistakesPage from './pages/MistakesPage';
+useEffect(() => {
+  const interval = setInterval(() => {
+    fetch('/api/ping').catch(console.error);
+  }, 14 * 60 * 1000); // 14 دقيقة
+  return () => clearInterval(interval);
+}, []);
 
 function App() {
   return (
