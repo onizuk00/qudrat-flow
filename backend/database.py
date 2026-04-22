@@ -1,7 +1,8 @@
 import sqlite3
 from contextlib import contextmanager
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+import secrets
 
 DATABASE_PATH = "qudrat.db"
 
@@ -91,11 +92,26 @@ def init_db():
             )
         ''')
         
-        # Create indexes
+        # Password resets table (NEW)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                reset_code TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                is_used BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Indexes
         conn.execute('CREATE INDEX IF NOT EXISTS idx_tests_user_id ON tests(user_id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON test_sessions(user_id)')
-        print("✅ Database initialized successfully")
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_resets_code ON password_resets(reset_code)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_resets_user ON password_resets(user_id)')
 
+# -------------------- USER FUNCTIONS --------------------
 def create_user(username, email, hashed_password):
     with db_connection() as conn:
         cursor = conn.execute(
@@ -119,6 +135,40 @@ def get_user_by_id(user_id):
         user = conn.execute('SELECT id, username, email, is_admin FROM users WHERE id = ?', (user_id,)).fetchone()
         return dict(user) if user else None
 
+def update_user_password(user_id: int, new_hashed_password: str):
+    with db_connection() as conn:
+        conn.execute('UPDATE users SET hashed_password = ? WHERE id = ?', (new_hashed_password, user_id))
+
+# -------------------- PASSWORD RESET FUNCTIONS --------------------
+def create_password_reset(user_id: int, expires_minutes: int = 15) -> str:
+    """إنشاء كود إعادة تعيين جديد للمستخدم"""
+    with db_connection() as conn:
+        # حذف أي أكواد قديمة غير مستخدمة للمستخدم نفسه
+        conn.execute('DELETE FROM password_resets WHERE user_id = ? AND is_used = 0', (user_id,))
+        
+        reset_code = str(secrets.randbelow(1000000)).zfill(6)
+        expires_at = datetime.now() + timedelta(minutes=expires_minutes)
+        
+        conn.execute('''
+            INSERT INTO password_resets (user_id, reset_code, expires_at)
+            VALUES (?, ?, ?)
+        ''', (user_id, reset_code, expires_at))
+        return reset_code
+
+def verify_reset_code(user_id: int, reset_code: str) -> bool:
+    """التحقق من صحة كود إعادة التعيين"""
+    with db_connection() as conn:
+        row = conn.execute('''
+            SELECT * FROM password_resets 
+            WHERE user_id = ? AND reset_code = ? AND is_used = 0 AND expires_at > ?
+        ''', (user_id, reset_code, datetime.now())).fetchone()
+        
+        if row:
+            conn.execute('UPDATE password_resets SET is_used = 1 WHERE id = ?', (row['id'],))
+            return True
+        return False
+
+# -------------------- TEST FUNCTIONS --------------------
 def get_all_tests_for_user(user_id):
     with db_connection() as conn:
         tests = conn.execute('SELECT * FROM tests WHERE user_id = ? ORDER BY created_at DESC', (user_id,)).fetchall()
