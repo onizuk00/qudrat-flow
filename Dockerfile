@@ -15,6 +15,11 @@ RUN apt-get update && apt-get install -y \
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 
+# --- هذا هو الإصلاح الأساسي ---
+# تعيين PYTHONPATH يضمن أن Python يعرف أن يبدأ البحث من المجلد /app
+ENV PYTHONPATH=/app
+# --------------------------------
+
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 RUN python -m playwright install chromium
