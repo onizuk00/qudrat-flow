@@ -48,6 +48,9 @@ class UserCreate(BaseModel):
 @app.post("/api/register")
 async def register(user: UserCreate):
     try:
+        # حل مشكلة bcrypt: اقتصاص كلمة المرور إلى 72 حرفاً (احتياطي إضافي)
+        user.password = user.password[:72]
+        
         if get_user_by_username(user.username):
             raise HTTPException(400, "اسم المستخدم موجود مسبقاً")
         if get_user_by_email(user.email):
