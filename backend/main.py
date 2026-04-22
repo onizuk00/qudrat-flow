@@ -8,8 +8,8 @@ import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-from database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
-from scraper import extract_google_form_data
+from backend.database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
+from backend.scraper import extract_google_form_data
 
 # Initialize database
 init_db()
