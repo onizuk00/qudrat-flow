@@ -8,12 +8,18 @@ def extract_google_form_data(url):
     Parses FB_PUBLIC_LOAD_DATA_ to get questions, options, and correct answers.
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # استخدام chromium مع إعدادات أقل استهلاكاً للموارد
+        browser = p.chromium.launch(
+            headless=True,
+            args=['--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox']
+        )
         page = browser.new_page()
         
         try:
-            page.goto(url, wait_until="networkidle")
-            page.wait_for_timeout(2000)  # Allow dynamic content to load
+            # تحسين: استخدام domcontentloaded بدلاً من networkidle (أسرع بكثير)
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # انتظار قصير لتحميل المحتوى الديناميكي (قللنا من 2 ثانية إلى 1 ثانية)
+            page.wait_for_timeout(1000)
             
             # Get page HTML
             html_content = page.content()
@@ -103,20 +109,20 @@ def parse_question_item(item):
             elif isinstance(opt, str):
                 options.append(opt)
     
-    # Look for correct answer indicator
-    if len(item) > 8 and isinstance(item[8], list):
+    # Look for correct answer indicator (محسّن)
+    if len(item) > 8 and isinstance(item[8], list) and len(item[8]) > 0:
         correct_data = item[8]
-        if len(correct_data) > 0:
-            if isinstance(correct_data[0], (int, float)):
-                correct_answer_index = int(correct_data[0])
-            elif isinstance(correct_data[0], list) and len(correct_data[0]) > 0:
-                correct_answer_index = int(correct_data[0][0]) if isinstance(correct_data[0][0], (int, float)) else -1
+        if isinstance(correct_data[0], (int, float)):
+            correct_answer_index = int(correct_data[0])
+        elif isinstance(correct_data[0], list) and len(correct_data[0]) > 0:
+            correct_answer_index = int(correct_data[0][0]) if isinstance(correct_data[0][0], (int, float)) else -1
     
     # Alternative location for correct answer
-    if correct_answer_index == -1 and len(item) > 9 and isinstance(item[9], list):
-        if len(item[9]) > 0 and isinstance(item[9][0], (int, float)):
+    if correct_answer_index == -1 and len(item) > 9 and isinstance(item[9], list) and len(item[9]) > 0:
+        if isinstance(item[9][0], (int, float)):
             correct_answer_index = int(item[9][0])
     
+    # إذا لم يتم العثور على إجابة صحيحة، استخدم أول خيار (لتجنب الأعطال)
     if correct_answer_index < 0 or correct_answer_index >= len(options):
         correct_answer_index = 0
     
@@ -157,9 +163,9 @@ def parse_alternative(data):
                                 for opt in elem:
                                     if isinstance(opt, str) and len(opt) > 0 and opt not in options:
                                         options.append(opt)
-                                if idx + 1 < len(item) and isinstance(item[idx + 1], list):
+                                if idx + 1 < len(item) and isinstance(item[idx + 1], list) and len(item[idx + 1]) > 0:
                                     corr = item[idx + 1]
-                                    if len(corr) > 0 and isinstance(corr[0], (int, float)):
+                                    if isinstance(corr[0], (int, float)):
                                         correct_idx = int(corr[0])
                         
                         if question_text and options and correct_idx >= 0:
