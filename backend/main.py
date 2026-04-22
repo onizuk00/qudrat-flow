@@ -1,8 +1,8 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Dict, Optional
 import os
 import asyncio
@@ -11,10 +11,12 @@ from pathlib import Path
 from backend.database import (
     init_db, create_user, get_user_by_username, get_user_by_email,
     get_all_tests_for_user, get_test_by_id, save_test,
-    save_session_results, get_test_history_for_user
+    save_session_results, get_test_history_for_user,
+    create_password_reset, verify_reset_code, update_user_password
 )
 from backend.scraper import extract_google_form_data
 from backend.auth import get_password_hash, authenticate_user, create_access_token, get_current_user
+from backend.email_utils import send_reset_email
 
 # -------------------- INIT --------------------
 init_db()
@@ -44,13 +46,20 @@ class UserCreate(BaseModel):
     email: str
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    reset_code: str
+    new_password: str
+
 # -------------------- AUTHENTICATION --------------------
 @app.post("/api/register")
 async def register(user: UserCreate):
     try:
-        # حل مشكلة bcrypt: اقتصاص كلمة المرور إلى 72 حرفاً (احتياطي إضافي)
+        # اقتصاص كلمة المرور احتياطياً (لحل مشكلة bcrypt)
         user.password = user.password[:72]
-        
         if get_user_by_username(user.username):
             raise HTTPException(400, "اسم المستخدم موجود مسبقاً")
         if get_user_by_email(user.email):
@@ -93,6 +102,31 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 async def me(current_user: dict = Depends(get_current_user)):
     return current_user
 
+# -------------------- PASSWORD RESET --------------------
+@app.post("/api/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest, background_tasks: BackgroundTasks):
+    user = get_user_by_email(request.email)
+    if not user:
+        # لأسباب أمنية لا نكشف وجود البريد
+        return {"message": "إذا كان البريد الإلكتروني مسجلاً، فسيتم إرسال كود التحقق"}
+    
+    reset_code = create_password_reset(user['id'])
+    background_tasks.add_task(send_reset_email, request.email, reset_code)
+    return {"message": "تم إرسال كود التحقق إلى بريدك الإلكتروني"}
+
+@app.post("/api/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    user = get_user_by_email(request.email)
+    if not user:
+        raise HTTPException(status_code=400, detail="البريد الإلكتروني غير مسجل")
+    
+    if not verify_reset_code(user['id'], request.reset_code):
+        raise HTTPException(status_code=400, detail="الكود غير صالح أو منتهي الصلاحية")
+    
+    new_hashed = get_password_hash(request.new_password[:72])
+    update_user_password(user['id'], new_hashed)
+    return {"message": "تم إعادة تعيين كلمة المرور بنجاح"}
+
 # -------------------- API ENDPOINTS --------------------
 @app.post("/api/scrape")
 async def scrape(req: ScrapeRequest, current_user: dict = Depends(get_current_user)):
@@ -132,7 +166,7 @@ async def submit(req: SubmitRequest, current_user: dict = Depends(get_current_us
 async def history(current_user: dict = Depends(get_current_user)):
     return get_test_history_for_user(current_user['id'])
 
-# -------------------- HTML PAGES (with password strength validation) --------------------
+# -------------------- HTML PAGES (UI) --------------------
 LOGIN_PAGE_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -149,32 +183,51 @@ LOGIN_PAGE_HTML = """
         <h1 class="text-4xl font-bold text-center text-white mb-6">🔐 قدرات فلو</h1>
         <div id="message" class="mb-4 text-center text-sm hidden"></div>
         
+        <!-- نموذج تسجيل الدخول -->
         <div id="login-form">
             <input type="text" id="username" placeholder="اسم المستخدم" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             <input type="password" id="password" placeholder="كلمة المرور" class="w-full p-3 rounded-lg mb-4 text-right bg-white/20 text-white placeholder-white/70 border border-white/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             <button onclick="login()" class="w-full bg-gradient-to-r from-blue-500 to-indigo-600 text-white py-3 rounded-lg font-bold hover:shadow-lg transition">تسجيل الدخول</button>
-            <p class="text-center text-white/80 mt-4">ليس لديك حساب؟ <a href="#" onclick="showRegister()" class="text-blue-300">إنشاء حساب</a></p>
+            <p class="text-center text-white/80 mt-3">ليس لديك حساب؟ <a href="#" onclick="showRegister()" class="text-blue-300">إنشاء حساب</a></p>
+            <p class="text-center text-white/70 text-sm mt-2"><a href="#" onclick="showForgot()" class="text-blue-300">نسيت كلمة المرور؟</a></p>
         </div>
         
+        <!-- نموذج إنشاء حساب -->
         <div id="register-form" style="display:none;">
             <input type="text" id="reg-username" placeholder="اسم المستخدم" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
             <input type="email" id="reg-email" placeholder="البريد الإلكتروني" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
             <input type="password" id="reg-password" placeholder="كلمة المرور" class="w-full p-3 rounded-lg mb-2 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
-            
-            <!-- Password requirements -->
             <div class="text-right text-white/80 text-sm space-y-1 mt-2">
                 <p class="font-bold mb-1">متطلبات كلمة المرور:</p>
-                <div id="req-length" class="flex items-center gap-2"><span>🔴</span> 8 أحرف على الأقل</div>
-                <div id="req-upper" class="flex items-center gap-2"><span>🔴</span> حرف كبير واحد على الأقل (A-Z)</div>
-                <div id="req-lower" class="flex items-center gap-2"><span>🔴</span> حرف صغير واحد على الأقل (a-z)</div>
-                <div id="req-digit" class="flex items-center gap-2"><span>🔴</span> رقم واحد على الأقل (0-9)</div>
+                <div id="req-length"><span>🔴</span> 8 أحرف على الأقل</div>
+                <div id="req-upper"><span>🔴</span> حرف كبير واحد على الأقل (A-Z)</div>
+                <div id="req-lower"><span>🔴</span> حرف صغير واحد على الأقل (a-z)</div>
+                <div id="req-digit"><span>🔴</span> رقم واحد على الأقل (0-9)</div>
             </div>
             <div id="reg-password-valid" class="text-green-400 text-center mt-2" style="display:none;">✅ كلمة المرور قوية</div>
-            
             <button id="register-btn" onclick="register()" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white py-3 rounded-lg font-bold hover:shadow-lg transition mt-4 opacity-50 cursor-not-allowed" disabled>إنشاء حساب</button>
             <p class="text-center text-white/80 mt-4"><a href="#" onclick="showLogin()" class="text-blue-300">عودة لتسجيل الدخول</a></p>
         </div>
+        
+        <!-- نموذج طلب إعادة تعيين كلمة المرور -->
+        <div id="forgot-form" style="display:none;">
+            <input type="email" id="reset-email" placeholder="البريد الإلكتروني" class="w-full p-3 rounded-lg mb-4 text-right bg-white/20 text-white placeholder-white/70 border border-white/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <button onclick="requestReset()" class="w-full bg-gradient-to-r from-yellow-500 to-orange-500 text-white py-3 rounded-lg font-bold hover:shadow-lg transition">إرسال كود التحقق</button>
+            <p class="text-center text-white/80 mt-4"><a href="#" onclick="showLogin()" class="text-blue-300">← عودة لتسجيل الدخول</a></p>
+            <div id="reset-message" class="mt-3 text-center text-sm hidden"></div>
+        </div>
+        
+        <!-- نموذج إدخال الكود وكلمة المرور الجديدة -->
+        <div id="verify-form" style="display:none;">
+            <input type="hidden" id="verify-email">
+            <input type="text" id="verify-code" placeholder="كود التحقق" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
+            <input type="password" id="new-password" placeholder="كلمة المرور الجديدة" class="w-full p-3 rounded-lg mb-4 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
+            <button onclick="resetPassword()" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white py-3 rounded-lg font-bold hover:shadow-lg transition">إعادة تعيين كلمة المرور</button>
+            <p class="text-center text-white/80 mt-4"><a href="#" onclick="showLogin()" class="text-blue-300">← عودة لتسجيل الدخول</a></p>
+            <div id="verify-message" class="mt-3 text-center text-sm hidden"></div>
+        </div>
     </div>
+
     <script>
         let passwordValid = false;
         
@@ -259,15 +312,79 @@ LOGIN_PAGE_HTML = """
             }catch(e){showMessage('خطأ في الاتصال: '+e.message);}
         }
         
+        // Forgot password functions
+        function showForgot(){
+            document.getElementById('login-form').style.display='none';
+            document.getElementById('register-form').style.display='none';
+            document.getElementById('forgot-form').style.display='block';
+            document.getElementById('verify-form').style.display='none';
+        }
+        
+        async function requestReset(){
+            let email = document.getElementById('reset-email').value;
+            if(!email){
+                showMessage('الرجاء إدخال البريد الإلكتروني', true);
+                return;
+            }
+            try{
+                let res = await fetch('/api/forgot-password', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email: email})
+                });
+                let data = await res.json();
+                if(res.ok){
+                    showMessage('تم إرسال كود التحقق إلى بريدك الإلكتروني', false);
+                    document.getElementById('verify-email').value = email;
+                    document.getElementById('forgot-form').style.display='none';
+                    document.getElementById('verify-form').style.display='block';
+                } else {
+                    showMessage(data.detail || 'حدث خطأ، حاول مرة أخرى');
+                }
+            } catch(e){
+                showMessage('خطأ في الاتصال: '+e.message);
+            }
+        }
+        
+        async function resetPassword(){
+            let email = document.getElementById('verify-email').value;
+            let code = document.getElementById('verify-code').value;
+            let newPwd = document.getElementById('new-password').value;
+            if(!code || !newPwd){
+                showMessage('الرجاء إدخال الكود وكلمة المرور الجديدة');
+                return;
+            }
+            try{
+                let res = await fetch('/api/reset-password', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email: email, reset_code: code, new_password: newPwd})
+                });
+                let data = await res.json();
+                if(res.ok){
+                    showMessage('تم إعادة تعيين كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول', false);
+                    setTimeout(() => showLogin(), 2000);
+                } else {
+                    showMessage(data.detail || 'فشل إعادة التعيين');
+                }
+            } catch(e){
+                showMessage('خطأ في الاتصال: '+e.message);
+            }
+        }
+        
         function showRegister(){
             document.getElementById('login-form').style.display='none';
             document.getElementById('register-form').style.display='block';
+            document.getElementById('forgot-form').style.display='none';
+            document.getElementById('verify-form').style.display='none';
             document.getElementById('reg-password').addEventListener('input', checkPasswordStrength);
             checkPasswordStrength();
         }
         function showLogin(){
-            document.getElementById('register-form').style.display='none';
             document.getElementById('login-form').style.display='block';
+            document.getElementById('register-form').style.display='none';
+            document.getElementById('forgot-form').style.display='none';
+            document.getElementById('verify-form').style.display='none';
         }
     </script>
 </body>
@@ -297,11 +414,20 @@ DASHBOARD_HTML = """
         </div>
     </div>
     <script>
-        const token=localStorage.getItem('token');
-        if(!token)window.location.href='/login-page';
-        fetch('/api/users/me',{headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(user=>{document.getElementById('user-info').innerHTML=`<strong class="text-white">${user.username}</strong> <span class="text-gray-300">(${user.email})</span>`;}).catch(()=>window.location.href='/login-page');
-        fetch('/api/tests',{headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(tests=>{let div=document.getElementById('tests-list');if(tests.length===0)div.innerHTML='<p class="text-gray-300">لا توجد اختبارات بعد.</p>';else tests.forEach(t=>{div.innerHTML+=`<div class="bg-white/5 border border-white/10 rounded-xl p-3 text-white">${t.title}</div>`;});});
-        function logout(){localStorage.removeItem('token');window.location.href='/login-page';}
+        const token = localStorage.getItem('token');
+        if(!token) window.location.href = '/login-page';
+        fetch('/api/users/me', {headers: {'Authorization': 'Bearer '+token}})
+            .then(r => r.json())
+            .then(user => { document.getElementById('user-info').innerHTML = `<strong class="text-white">${user.username}</strong> <span class="text-gray-300">(${user.email})</span>`; })
+            .catch(() => window.location.href = '/login-page');
+        fetch('/api/tests', {headers: {'Authorization': 'Bearer '+token}})
+            .then(r => r.json())
+            .then(tests => {
+                let div = document.getElementById('tests-list');
+                if(tests.length===0) div.innerHTML = '<p class="text-gray-300">لا توجد اختبارات بعد. أضف اختباراً عبر واجهة React لاحقاً.</p>';
+                else tests.forEach(t => { div.innerHTML += `<div class="bg-white/5 border border-white/10 rounded-xl p-3 text-white">${t.title}</div>`; });
+            });
+        function logout(){ localStorage.removeItem('token'); window.location.href = '/login-page'; }
     </script>
 </body>
 </html>
