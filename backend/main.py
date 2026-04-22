@@ -3,20 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, Optional, List
 import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+from datetime import datetime, timedelta
+import time
 
 from backend.database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
 from backend.scraper import extract_google_form_data
 
-# Initialize database
+# --- Initialize DB ---
 init_db()
 
 app = FastAPI(title="Qudrat-Flow API")
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,10 +27,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Thread pool for blocking operations
-executor = ThreadPoolExecutor(max_workers=4)
+# --- Simple Cache for scraped URLs (TTL 1 hour) ---
+scrape_cache = {}
+CACHE_TTL_SECONDS = 3600
 
-# Request/Response Models
+def get_cached_scrape(url: str):
+    if url in scrape_cache:
+        entry = scrape_cache[url]
+        if datetime.now() - entry['timestamp'] < timedelta(seconds=CACHE_TTL_SECONDS):
+            return entry['data']
+        else:
+            del scrape_cache[url]
+    return None
+
+def set_cached_scrape(url: str, data):
+    scrape_cache[url] = {'data': data, 'timestamp': datetime.now()}
+
+# --- Background task for scraping ---
+executor = ThreadPoolExecutor(max_workers=2)
+
+async def run_scrape(url: str):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, extract_google_form_data, url)
+
+# --- Models ---
 class ScrapeRequest(BaseModel):
     url: str
 
@@ -36,56 +58,53 @@ class SubmitRequest(BaseModel):
     test_id: int
     time_spent_seconds: int
     time_limit_seconds: int
-    answers: Dict[str, int]  # question_id -> selected_index
+    answers: Dict[str, int]
 
-class ScrapeResponse(BaseModel):
-    test_id: int
-    title: str
-    question_count: int
+# --- API Endpoints ---
+@app.get("/api/ping")
+async def ping():
+    """Endpoint to keep the service alive."""
+    return {"status": "alive", "timestamp": time.time()}
 
-class TestResponse(BaseModel):
-    id: int
-    title: str
-    reading_passage: Optional[str]
-    questions: List[dict]
-
-# API Endpoints
 @app.post("/api/scrape")
-async def scrape_google_form(request: ScrapeRequest):
-    """Scrape a Google Form and save to database"""
-    try:
-        # Run scraper in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        form_data = await loop.run_in_executor(
-            executor, 
-            extract_google_form_data, 
-            request.url
+async def scrape_google_form(request: ScrapeRequest, background_tasks: BackgroundTasks):
+    # Check cache first
+    cached = get_cached_scrape(request.url)
+    if cached:
+        # save to DB and return
+        test_id = save_test(
+            title=cached['title'],
+            url=request.url,
+            reading_passage=cached.get('reading_passage', ''),
+            questions_data=cached['questions']
         )
-        
-        # Save to database
+        return {"test_id": test_id, "title": cached['title'], "question_count": len(cached['questions']), "cached": True}
+    
+    # Otherwise scrape in background (but we need to wait for result? Better to scrape async with timeout)
+    # For simplicity, we'll scrape directly but with timeout and speed optimizations.
+    # To avoid long wait, we can use a task and return a job ID, but for MVP let's keep direct with increased timeout.
+    try:
+        form_data = await asyncio.wait_for(run_scrape(request.url), timeout=45.0)
+        # Cache it
+        set_cached_scrape(request.url, form_data)
         test_id = save_test(
             title=form_data['title'],
             url=request.url,
             reading_passage=form_data.get('reading_passage', ''),
             questions_data=form_data['questions']
         )
-        
-        return ScrapeResponse(
-            test_id=test_id,
-            title=form_data['title'],
-            question_count=len(form_data['questions'])
-        )
+        return {"test_id": test_id, "title": form_data['title'], "question_count": len(form_data['questions']), "cached": False}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="استغرقت عملية الاستخراج أكثر من 45 ثانية. الرابط قد يكون معقداً أو بطيئاً.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/tests")
 async def get_tests():
-    """Get all tests with session history"""
     return get_all_tests()
 
 @app.get("/api/tests/{test_id}")
 async def get_test(test_id: int):
-    """Get a specific test with all questions"""
     test = get_test_by_id(test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
@@ -93,7 +112,6 @@ async def get_test(test_id: int):
 
 @app.post("/api/submit")
 async def submit_test(request: SubmitRequest):
-    """Submit test answers and get results"""
     try:
         result = save_session_results(
             test_id=request.test_id,
@@ -107,29 +125,21 @@ async def submit_test(request: SubmitRequest):
 
 @app.get("/api/history")
 async def get_history():
-    """Get all test session history"""
     return get_test_history()
 
 @app.get("/api/mistakes")
 async def get_mistakes(test_id: Optional[int] = None):
-    """Get mistakes, optionally filtered by test"""
     return get_mistakes_by_test(test_id)
 
 @app.post("/api/retest/{test_id}")
 async def retest_mistakes(test_id: int):
-    """Get only questions that were previously answered incorrectly"""
-    wrong_question_ids = get_distinct_wrong_question_ids(test_id)
-    
-    if not wrong_question_ids:
-        raise HTTPException(status_code=404, detail="No mistakes found for this test")
-    
-    questions = get_questions_by_ids(wrong_question_ids)
-    
-    # Get original test info
+    wrong_ids = get_distinct_wrong_question_ids(test_id)
+    if not wrong_ids:
+        raise HTTPException(status_code=404, detail="No mistakes found")
+    questions = get_questions_by_ids(wrong_ids)
     test = get_test_by_id(test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
-    
     return {
         "id": test_id,
         "title": f"{test['title']} (Mistakes Only)",
@@ -138,31 +148,22 @@ async def retest_mistakes(test_id: int):
         "is_retest": True
     }
 
-# Serve React Frontend (after build)
-import os
-import pathlib
-
-# Get the absolute path to the frontend/dist directory
-current_file = pathlib.Path(__file__).resolve()
-backend_dir = current_file.parent
-project_root = backend_dir.parent
-static_dir = project_root / "frontend" / "dist"
-
-if static_dir.exists() and static_dir.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
-    
+# Serve frontend static files
+static_dir = "../frontend/dist"
+if os.path.exists(static_dir):
+    app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
     @app.get("/")
     async def serve_root():
-        return FileResponse(str(static_dir / "index.html"))
-    
+        return FileResponse(f"{static_dir}/index.html")
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Don't interfere with API routes
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404)
-        file_path = static_dir / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        return FileResponse(str(static_dir / "index.html"))
-else:
-    print(f"Warning: Frontend build not found at {static_dir}")
+        file_path = f"{static_dir}/{full_path}"
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(f"{static_dir}/index.html")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=2)
