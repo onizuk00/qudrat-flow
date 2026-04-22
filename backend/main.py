@@ -105,6 +105,33 @@ async def retest_mistakes(test_id: int):
         "is_retest": True
     }
 
+# ------------------- Debug endpoint to check frontend files -------------------
+
+@app.get("/debug")
+async def debug_info():
+    current = Path(__file__).resolve().parent
+    parent = current.parent
+    frontend_dist = parent / "frontend" / "dist"
+    
+    info = {
+        "current_dir": str(current),
+        "parent_dir": str(parent),
+        "frontend_dist_exists": frontend_dist.exists(),
+        "frontend_dist_is_dir": frontend_dist.is_dir() if frontend_dist.exists() else False,
+        "index_html_exists": (frontend_dist / "index.html").exists() if frontend_dist.exists() else False,
+        "assets_dir_exists": (frontend_dist / "assets").exists() if frontend_dist.exists() else False,
+        "files_in_dist": []
+    }
+    
+    if frontend_dist.exists() and frontend_dist.is_dir():
+        try:
+            for item in frontend_dist.iterdir():
+                info["files_in_dist"].append(item.name)
+        except:
+            pass
+    
+    return info
+
 # ------------------- Serve Frontend Static Files -------------------
 
 current_dir = Path(__file__).resolve().parent.parent
