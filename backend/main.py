@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Dict, Optional
@@ -129,7 +129,7 @@ async def submit(req: SubmitRequest, current_user: dict = Depends(get_current_us
 async def history(current_user: dict = Depends(get_current_user)):
     return get_test_history_for_user(current_user['id'])
 
-# -------------------- SIMPLE HTML UI --------------------
+# -------------------- HTML PAGES (with password strength validation) --------------------
 LOGIN_PAGE_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -145,21 +145,66 @@ LOGIN_PAGE_HTML = """
     <div class="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl p-8 max-w-md w-full border border-white/20">
         <h1 class="text-4xl font-bold text-center text-white mb-6">🔐 قدرات فلو</h1>
         <div id="message" class="mb-4 text-center text-sm hidden"></div>
+        
         <div id="login-form">
             <input type="text" id="username" placeholder="اسم المستخدم" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             <input type="password" id="password" placeholder="كلمة المرور" class="w-full p-3 rounded-lg mb-4 text-right bg-white/20 text-white placeholder-white/70 border border-white/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             <button onclick="login()" class="w-full bg-gradient-to-r from-blue-500 to-indigo-600 text-white py-3 rounded-lg font-bold hover:shadow-lg transition">تسجيل الدخول</button>
             <p class="text-center text-white/80 mt-4">ليس لديك حساب؟ <a href="#" onclick="showRegister()" class="text-blue-300">إنشاء حساب</a></p>
         </div>
+        
         <div id="register-form" style="display:none;">
             <input type="text" id="reg-username" placeholder="اسم المستخدم" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
             <input type="email" id="reg-email" placeholder="البريد الإلكتروني" class="w-full p-3 rounded-lg mb-3 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
-            <input type="password" id="reg-password" placeholder="كلمة المرور" class="w-full p-3 rounded-lg mb-4 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
-            <button onclick="register()" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white py-3 rounded-lg font-bold hover:shadow-lg transition">إنشاء حساب</button>
+            <input type="password" id="reg-password" placeholder="كلمة المرور" class="w-full p-3 rounded-lg mb-2 text-right bg-white/20 text-white placeholder-white/70 border border-white/30">
+            
+            <!-- Password requirements -->
+            <div class="text-right text-white/80 text-sm space-y-1 mt-2">
+                <p class="font-bold mb-1">متطلبات كلمة المرور:</p>
+                <div id="req-length" class="flex items-center gap-2"><span>🔴</span> 8 أحرف على الأقل</div>
+                <div id="req-upper" class="flex items-center gap-2"><span>🔴</span> حرف كبير واحد على الأقل (A-Z)</div>
+                <div id="req-lower" class="flex items-center gap-2"><span>🔴</span> حرف صغير واحد على الأقل (a-z)</div>
+                <div id="req-digit" class="flex items-center gap-2"><span>🔴</span> رقم واحد على الأقل (0-9)</div>
+            </div>
+            <div id="reg-password-valid" class="text-green-400 text-center mt-2" style="display:none;">✅ كلمة المرور قوية</div>
+            
+            <button id="register-btn" onclick="register()" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white py-3 rounded-lg font-bold hover:shadow-lg transition mt-4 opacity-50 cursor-not-allowed" disabled>إنشاء حساب</button>
             <p class="text-center text-white/80 mt-4"><a href="#" onclick="showLogin()" class="text-blue-300">عودة لتسجيل الدخول</a></p>
         </div>
     </div>
     <script>
+        let passwordValid = false;
+        
+        function checkPasswordStrength() {
+            const pwd = document.getElementById('reg-password').value;
+            const lengthOk = pwd.length >= 8;
+            const upperOk = /[A-Z]/.test(pwd);
+            const lowerOk = /[a-z]/.test(pwd);
+            const digitOk = /[0-9]/.test(pwd);
+            
+            document.getElementById('req-length').innerHTML = (lengthOk ? '✅' : '🔴') + ' 8 أحرف على الأقل';
+            document.getElementById('req-upper').innerHTML = (upperOk ? '✅' : '🔴') + ' حرف كبير واحد على الأقل (A-Z)';
+            document.getElementById('req-lower').innerHTML = (lowerOk ? '✅' : '🔴') + ' حرف صغير واحد على الأقل (a-z)';
+            document.getElementById('req-digit').innerHTML = (digitOk ? '✅' : '🔴') + ' رقم واحد على الأقل (0-9)';
+            
+            const allOk = lengthOk && upperOk && lowerOk && digitOk;
+            const validDiv = document.getElementById('reg-password-valid');
+            const registerBtn = document.getElementById('register-btn');
+            
+            if (allOk) {
+                validDiv.style.display = 'block';
+                registerBtn.disabled = false;
+                registerBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                passwordValid = true;
+            } else {
+                validDiv.style.display = 'none';
+                registerBtn.disabled = true;
+                registerBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                passwordValid = false;
+            }
+            return allOk;
+        }
+        
         function showMessage(msg, isError=true){
             let d=document.getElementById('message');
             d.innerText=msg;
@@ -167,9 +212,9 @@ LOGIN_PAGE_HTML = """
             d.classList.remove('hidden');
             setTimeout(()=>d.classList.add('hidden'),3000);
         }
+        
         async function login(){
-            let u=document.getElementById('username').value;
-            let p=document.getElementById('password').value;
+            let u=document.getElementById('username').value,p=document.getElementById('password').value;
             let fd=new URLSearchParams();
             fd.append('username',u);
             fd.append('password',p);
@@ -181,18 +226,22 @@ LOGIN_PAGE_HTML = """
                     localStorage.setItem('username',data.username);
                     showMessage('✅ تم تسجيل الدخول بنجاح!',false);
                     setTimeout(()=>window.location.href='/dashboard',1000);
-                }else{
-                    showMessage(data.detail||'فشل تسجيل الدخول');
-                }
-            }catch(e){
-                console.error(e);
-                showMessage('خطأ في الاتصال: '+e.message);
-            }
+                }else showMessage(data.detail||'فشل تسجيل الدخول');
+            }catch(e){showMessage('خطأ في الاتصال: '+e.message);}
         }
+        
         async function register(){
+            if(!passwordValid){
+                showMessage('يرجى التأكد من أن كلمة المرور تستوفي جميع المتطلبات');
+                return;
+            }
             let u=document.getElementById('reg-username').value;
             let e=document.getElementById('reg-email').value;
             let p=document.getElementById('reg-password').value;
+            if(!u || !e || !p){
+                showMessage('جميع الحقول مطلوبة');
+                return;
+            }
             try{
                 let res=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,email:e,password:p})});
                 let data=await res.json();
@@ -204,13 +253,19 @@ LOGIN_PAGE_HTML = """
                 }else{
                     showMessage(data.detail||'فشل إنشاء الحساب');
                 }
-            }catch(e){
-                console.error(e);
-                showMessage('خطأ في الاتصال: '+e.message);
-            }
+            }catch(e){showMessage('خطأ في الاتصال: '+e.message);}
         }
-        function showRegister(){document.getElementById('login-form').style.display='none';document.getElementById('register-form').style.display='block';}
-        function showLogin(){document.getElementById('register-form').style.display='none';document.getElementById('login-form').style.display='block';}
+        
+        function showRegister(){
+            document.getElementById('login-form').style.display='none';
+            document.getElementById('register-form').style.display='block';
+            document.getElementById('reg-password').addEventListener('input', checkPasswordStrength);
+            checkPasswordStrength();
+        }
+        function showLogin(){
+            document.getElementById('register-form').style.display='none';
+            document.getElementById('login-form').style.display='block';
+        }
     </script>
 </body>
 </html>
