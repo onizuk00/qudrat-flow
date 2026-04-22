@@ -10,18 +10,20 @@ SECRET_KEY = "your-super-secret-key-change-this-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# تكوين bcrypt مع تعيين الحد الأقصى للطول
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/token")
 
-# دالة لاقتطاع كلمة المرور إلى 72 حرفًا (حد bcrypt)
 def truncate_password(password: str) -> str:
-    """Truncate password to 72 bytes to avoid bcrypt limitation."""
-    return password[:72]
+    """Truncate password to 72 bytes (bcrypt limit)"""
+    # تحويل إلى bytes واقتطاع
+    password_bytes = password.encode('utf-8')[:72]
+    return password_bytes.decode('utf-8', errors='ignore')
 
-def verify_password(plain_password, hashed_password):
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(truncate_password(plain_password), hashed_password)
 
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     return pwd_context.hash(truncate_password(password))
 
 def authenticate_user(username: str, password: str):
