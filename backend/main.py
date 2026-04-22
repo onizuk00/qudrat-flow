@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse  # <-- تمت الإضافة
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Dict, Optional
@@ -87,6 +87,137 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 @app.get("/api/users/me")
 async def read_users_me(current_user: dict = Depends(get_current_user)):
     return current_user
+
+# ==================== SIMPLE HTML PAGES (TEMPORARY UI) ====================
+
+@app.get("/login-page")
+async def login_page():
+    html_content = """
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ar">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>قدرات فلو - تسجيل الدخول</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+        <style>body { font-family: 'Tajawal', sans-serif; }</style>
+    </head>
+    <body class="bg-gradient-to-br from-blue-50 to-teal-50 min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
+            <h1 class="text-3xl font-bold text-center text-blue-700 mb-6">🔐 قدرات فلو</h1>
+            
+            <div id="message" class="mb-4 text-center text-sm hidden"></div>
+            
+            <div id="login-form">
+                <input type="text" id="username" placeholder="اسم المستخدم" class="w-full p-3 border rounded-lg mb-3 text-right">
+                <input type="password" id="password" placeholder="كلمة المرور" class="w-full p-3 border rounded-lg mb-4 text-right">
+                <button onclick="login()" class="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700 transition">تسجيل الدخول</button>
+                <p class="text-center text-gray-500 mt-4">ليس لديك حساب؟ <a href="#" onclick="showRegister()" class="text-blue-600">إنشاء حساب</a></p>
+            </div>
+
+            <div id="register-form" style="display:none;">
+                <input type="text" id="reg-username" placeholder="اسم المستخدم" class="w-full p-3 border rounded-lg mb-3 text-right">
+                <input type="email" id="reg-email" placeholder="البريد الإلكتروني" class="w-full p-3 border rounded-lg mb-3 text-right">
+                <input type="password" id="reg-password" placeholder="كلمة المرور" class="w-full p-3 border rounded-lg mb-4 text-right">
+                <button onclick="register()" class="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 transition">إنشاء حساب</button>
+                <p class="text-center text-gray-500 mt-4"><a href="#" onclick="showLogin()" class="text-blue-600">عودة لتسجيل الدخول</a></p>
+            </div>
+        </div>
+
+        <script>
+            function showMessage(msg, isError=true) {
+                const msgDiv = document.getElementById('message');
+                msgDiv.innerText = msg;
+                msgDiv.className = 'mb-4 text-center text-sm p-2 rounded ' + (isError ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700');
+                msgDiv.classList.remove('hidden');
+                setTimeout(() => msgDiv.classList.add('hidden'), 3000);
+            }
+
+            async function login() {
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                const formData = new URLSearchParams();
+                formData.append('username', username);
+                formData.append('password', password);
+                try {
+                    const res = await fetch('/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
+                    const data = await res.json();
+                    if (res.ok) {
+                        localStorage.setItem('token', data.access_token);
+                        localStorage.setItem('username', data.username);
+                        showMessage('✅ تم تسجيل الدخول بنجاح! جاري التحويل...', false);
+                        setTimeout(() => { window.location.href = '/dashboard'; }, 1000);
+                    } else {
+                        showMessage(data.detail || 'فشل تسجيل الدخول');
+                    }
+                } catch(e) { showMessage('خطأ في الاتصال'); }
+            }
+
+            async function register() {
+                const username = document.getElementById('reg-username').value;
+                const email = document.getElementById('reg-email').value;
+                const password = document.getElementById('reg-password').value;
+                try {
+                    const res = await fetch('/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, email, password }) });
+                    const data = await res.json();
+                    if (res.ok) {
+                        localStorage.setItem('token', data.access_token);
+                        localStorage.setItem('username', data.username);
+                        showMessage('✅ تم إنشاء الحساب وتسجيل الدخول!', false);
+                        setTimeout(() => { window.location.href = '/dashboard'; }, 1000);
+                    } else {
+                        showMessage(data.detail || 'فشل إنشاء الحساب');
+                    }
+                } catch(e) { showMessage('خطأ في الاتصال'); }
+            }
+
+            function showRegister() { document.getElementById('login-form').style.display='none'; document.getElementById('register-form').style.display='block'; }
+            function showLogin() { document.getElementById('register-form').style.display='none'; document.getElementById('login-form').style.display='block'; }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.get("/dashboard")
+async def dashboard():
+    return HTMLResponse(content="""
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head><meta charset="UTF-8"><title>لوحة التحكم - قدرات فلو</title><script src="https://cdn.tailwindcss.com"></script></head>
+    <body class="bg-gray-100 p-8">
+        <div class="max-w-4xl mx-auto bg-white rounded-xl shadow p-6">
+            <div class="flex justify-between items-center mb-4">
+                <button onclick="logout()" class="bg-red-500 text-white px-4 py-2 rounded">تسجيل خروج</button>
+                <h1 class="text-2xl font-bold">📚 قدرات فلو</h1>
+            </div>
+            <p id="user-info" class="mb-4 text-gray-600">جاري تحميل البيانات...</p>
+            <hr class="my-4">
+            <h2 class="text-xl font-bold">اختباراتي</h2>
+            <div id="tests-list" class="mt-2"></div>
+            <div class="mt-6">
+                <a href="/login-page" class="text-blue-600">← تسجيل الدخول بحساب آخر</a>
+            </div>
+        </div>
+        <script>
+            const token = localStorage.getItem('token');
+            if (!token) window.location.href = '/login-page';
+            fetch('/api/users/me', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(r => r.json()).then(user => { 
+                    document.getElementById('user-info').innerHTML = `<strong>${user.username}</strong> (${user.email})`; 
+                }).catch(() => window.location.href = '/login-page');
+            fetch('/api/tests', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(r => r.json()).then(tests => { 
+                    const div = document.getElementById('tests-list');
+                    if(tests.length===0) div.innerHTML = '<p class="text-gray-500">لا توجد اختبارات بعد. أضف اختباراً عبر واجهة React لاحقاً.</p>';
+                    else tests.forEach(t => { div.innerHTML += `<div class="border p-3 my-2 rounded-lg bg-gray-50">${t.title}</div>`; });
+                });
+            function logout() { localStorage.removeItem('token'); window.location.href = '/login-page'; }
+        </script>
+    </body>
+    </html>
+    """)
 
 # ==================== TEST ENDPOINTS (Protected) ====================
 
@@ -252,18 +383,24 @@ if frontend_dist.exists() and frontend_dist.is_dir():
         index_file = frontend_dist / "index.html"
         if index_file.exists():
             return FileResponse(str(index_file))
-        raise HTTPException(status_code=404, detail="index.html not found")
+        # إذا لم توجد الواجهة، انتقل إلى صفحة تسجيل الدخول البسيطة
+        return HTMLResponse(status_code=302, headers={"Location": "/login-page"})
     
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        if full_path.startswith("api/") or full_path.startswith("debug"):
+        # تجنب التعارض مع المسارات الجديدة
+        if full_path.startswith("api/") or full_path.startswith("debug") or full_path.startswith("login-page") or full_path.startswith("dashboard"):
             raise HTTPException(status_code=404)
         file_path = frontend_dist / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
         return FileResponse(str(frontend_dist / "index.html"))
 else:
-    print("WARNING: Frontend dist not found! API will work but UI won't.")
+    print("WARNING: Frontend dist not found! Using fallback HTML pages.")
+    # إذا لم توجد الواجهة، نستخدم صفحاتنا البديلة
+    @app.get("/")
+    async def root_fallback():
+        return HTMLResponse(status_code=302, headers={"Location": "/login-page"})
 
 # ==================== KEEP-ALIVE ====================
 
