@@ -14,14 +14,20 @@ RUN apt-get update && apt-get install -y \
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
-ENV PYTHONPATH=/app
-ENV PORT=10000
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 RUN python -m playwright install chromium
 
+# نسخ مجلد backend بالكامل
 COPY backend/ ./backend/
+
+# نسخ الواجهة المبنية من المرحلة الأولى
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
+# طباعة هيكل الملفات للتأكد (للتشخيص)
+RUN ls -la ./frontend/dist/ || echo "frontend/dist not found"
+RUN ls -la ./backend/ || echo "backend not found"
+
+ENV PORT=10000
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "10000"]
