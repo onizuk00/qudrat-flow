@@ -7,10 +7,16 @@ from typing import Dict, Optional
 import os
 import asyncio
 from pathlib import Path
+import sys
 
-# استيراد الدوال من الملفات الأخرى
-from database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
-from scraper import extract_google_form_data
+# --- إضافة المجلد الرئيسي للمشروع إلى مسار بحث Python ---
+# هذا يضمن أن Python يمكنه رؤية مجلد 'backend' كحزمة
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# --- الآن أصبحت الاستيرادات المطلقة تعمل بشكل صحيح ---
+from backend.database import init_db, save_test, get_all_tests, get_test_by_id, save_session_results, get_test_history, get_mistakes_by_test, get_distinct_wrong_question_ids, get_questions_by_ids
+from backend.scraper import extract_google_form_data
+# -------------------------------------------------------
 
 # تهيئة قاعدة البيانات
 init_db()
@@ -26,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# نماذج البيانات
+# ------------------- نماذج البيانات -------------------
 class ScrapeRequest(BaseModel):
     url: str
 
@@ -37,10 +43,10 @@ class SubmitRequest(BaseModel):
     answers: Dict[str, int]
 
 # ------------------- API Endpoints -------------------
-
 @app.post("/api/scrape")
 async def scrape_google_form(request: ScrapeRequest):
     try:
+        # الدالة أصبحت غير متزامنة، لذا نستخدم await
         form_data = await extract_google_form_data(request.url)
         test_id = save_test(
             title=form_data['title'],
@@ -104,21 +110,13 @@ async def retest_mistakes(test_id: int):
     }
 
 # ------------------- خدمة الملفات الثابتة (Frontend) -------------------
-# تحديد المسار الصحيح لمجلد frontend/dist
-current_dir = Path(__file__).resolve().parent
-frontend_dist = current_dir.parent / "frontend" / "dist"
-
-print(f"Looking for frontend at: {frontend_dist}")
-print(f"Exists: {frontend_dist.exists()}")
-
+current_dir = Path(__file__).resolve().parent.parent
+frontend_dist = current_dir / "frontend" / "dist"
 if frontend_dist.exists() and frontend_dist.is_dir():
-    # خدمة الملفات الثابتة
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
-    
     @app.get("/")
     async def serve_root():
         return FileResponse(str(frontend_dist / "index.html"))
-    
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         if full_path.startswith("api/"):
@@ -127,8 +125,6 @@ if frontend_dist.exists() and frontend_dist.is_dir():
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
         return FileResponse(str(frontend_dist / "index.html"))
-else:
-    print("WARNING: Frontend dist not found! API will work but UI won't.")
 
 # ------------------- منع السكون (Keep-Alive) -------------------
 @app.on_event("startup")
