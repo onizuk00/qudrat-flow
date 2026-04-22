@@ -1,85 +1,73 @@
 import re
 import json
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
-def extract_google_form_data(url):
+async def extract_google_form_data(url: str):
     """
-    Extract test data from Google Form URL using Playwright with MAXIMUM SPEED.
-    Typically completes in 5-15 seconds.
+    استخراج بيانات Google Form بأقصى سرعة.
+    - حظر الموارد غير الضرورية
+    - استخدام domcontentloaded
+    - مهلة 30 ثانية
     """
-    with sync_playwright() as p:
-        # Launch browser with optimizations: no images, no GPU, no shared memory issues
-        browser = p.chromium.launch(
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
             headless=True,
             args=[
                 '--disable-gpu',
                 '--disable-dev-shm-usage',
                 '--no-sandbox',
-                '--blink-settings=imagesEnabled=false',  # منع تحميل الصور
-                '--disable-javascript',  # ملاحظة: هذا قد يعطل بعض النماذج، جرب بدونه إذا فشل
+                '--blink-settings=imagesEnabled=false',
+                '--disable-javascript',   # قد يعطل بعض النماذج، جرب بدونه إذا لزم الأمر
             ]
         )
-        
-        # Create context with small viewport and custom user agent
-        context = browser.new_context(
+        context = await browser.new_context(
             viewport={'width': 800, 'height': 600},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         )
-        page = context.new_page()
-        
-        # Block unnecessary resources (images, CSS, fonts)
-        def block_resources(route):
+        page = await context.new_page()
+
+        # حظر الصور والخطوط وملفات CSS
+        async def block_resources(route):
             if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
-                route.abort()
+                await route.abort()
             else:
-                route.continue_()
-        
-        page.route('**/*', block_resources)
-        
+                await route.continue_()
+        await page.route('**/*', block_resources)
+
         try:
-            # Use 'commit' which is the fastest - doesn't wait for any content
-            page.goto(url, wait_until='commit', timeout=30000)
-            
-            # Give just 500ms for basic JavaScript to run
-            page.wait_for_timeout(500)
-            
-            # Get page HTML
-            html_content = page.content()
-            
-            # Extract FB_PUBLIC_LOAD_DATA_ JSON
-            pattern = r'var\s+FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);'
-            match = re.search(pattern, html_content, re.DOTALL)
-            
+            # استخدم 'domcontentloaded' بدلاً من 'networkidle' للسرعة
+            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            # انتظار قصير جداً (500ms) للجافاسكريبت الأساسي
+            await page.wait_for_timeout(500)
+
+            html = await page.content()
+            match = re.search(r'var\s+FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);', html, re.DOTALL)
             if not match:
-                # Fallback: try with 'domcontentloaded' (slower but more reliable)
-                page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                page.wait_for_timeout(1000)
-                html_content = page.content()
-                match = re.search(pattern, html_content, re.DOTALL)
-                
+                # محاولة بديلة بانتظار أطول قليلاً
+                await page.goto(url, wait_until='networkidle', timeout=30000)
+                await page.wait_for_timeout(1000)
+                html = await page.content()
+                match = re.search(r'var\s+FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);', html, re.DOTALL)
                 if not match:
-                    raise ValueError("Could not find FB_PUBLIC_LOAD_DATA_ in page source. Make sure this is a Google Form.")
-            
+                    raise ValueError("لم نجد بيانات النموذج. تأكد من أن الرابط صحيح ونموذج اختبار.")
+
             data = json.loads(match.group(1))
-            
-            # Parse the nested JSON structure
             form_info = data[1] if len(data) > 1 else None
             if not form_info:
-                raise ValueError("Invalid form data structure")
-            
-            # Extract title
-            title = "Untitled Form"
+                raise ValueError("بنية النموذج غير صالحة")
+
+            # استخراج العنوان
+            title = "نموذج بدون عنوان"
             if len(form_info) > 8 and form_info[8]:
                 title = form_info[8]
             elif len(form_info) > 1 and isinstance(form_info[1], list) and len(form_info[1]) > 0:
-                title = form_info[1][0] if isinstance(form_info[1][0], str) else "Untitled Form"
-            
-            # Extract description (reading passage)
+                title = form_info[1][0] if isinstance(form_info[1][0], str) else "نموذج بدون عنوان"
+
+            # نص القراءة (إن وجد)
             reading_passage = ""
             if len(form_info) > 10 and isinstance(form_info[10], str):
                 reading_passage = form_info[10]
-            
-            # Extract questions from sections
+
             questions = []
             if len(form_info) > 1 and isinstance(form_info[1], list):
                 sections = form_info[1]
@@ -87,128 +75,102 @@ def extract_google_form_data(url):
                     if isinstance(section, list) and len(section) > 1:
                         items = section[1] if len(section) > 1 else []
                         for item in items:
-                            question_data = parse_question_item(item)
-                            if question_data:
-                                questions.append(question_data)
-            
-            # If no questions found, try alternative parsing
+                            q = parse_question_item(item)
+                            if q:
+                                questions.append(q)
+
             if not questions:
                 questions = parse_alternative(data)
-            
+
             if not questions:
-                raise ValueError("No questions found in the form. Please ensure the form has questions.")
-            
+                raise ValueError("لم يتم العثور على أسئلة في النموذج")
+
             return {
                 'title': title.strip(),
                 'reading_passage': reading_passage.strip(),
                 'questions': questions
             }
-            
-        except Exception as e:
-            raise ValueError(f"Extraction failed: {str(e)}")
         finally:
-            browser.close()
+            await browser.close()
 
 def parse_question_item(item):
-    """Parse a single question item from Google Forms data"""
     if not isinstance(item, list) or len(item) < 4:
         return None
-    
-    # Question text is usually at index 1 or 2
     question_text = ""
     if len(item) > 2 and isinstance(item[2], str):
         question_text = item[2]
     elif len(item) > 1 and isinstance(item[1], str):
         question_text = item[1]
-    
     if not question_text:
         return None
-    
-    # Options are typically at index 4
+
     options = []
-    correct_answer_index = -1
-    
     if len(item) > 4 and isinstance(item[4], list):
-        options_data = item[4]
-        for opt in options_data:
+        for opt in item[4]:
             if isinstance(opt, list) and len(opt) > 0:
-                opt_text = opt[0] if len(opt) > 0 and isinstance(opt[0], str) else ""
+                opt_text = opt[0] if isinstance(opt[0], str) else ""
                 if not opt_text and len(opt) > 1 and isinstance(opt[1], str):
                     opt_text = opt[1]
                 if opt_text:
                     options.append(opt_text)
             elif isinstance(opt, str):
                 options.append(opt)
-    
-    # Look for correct answer indicator
+
+    correct_index = -1
     if len(item) > 8 and isinstance(item[8], list) and len(item[8]) > 0:
-        correct_data = item[8]
-        if isinstance(correct_data[0], (int, float)):
-            correct_answer_index = int(correct_data[0])
-        elif isinstance(correct_data[0], list) and len(correct_data[0]) > 0:
-            correct_answer_index = int(correct_data[0][0]) if isinstance(correct_data[0][0], (int, float)) else -1
-    
-    # Alternative location for correct answer
-    if correct_answer_index == -1 and len(item) > 9 and isinstance(item[9], list) and len(item[9]) > 0:
+        if isinstance(item[8][0], (int, float)):
+            correct_index = int(item[8][0])
+        elif isinstance(item[8][0], list) and len(item[8][0]) > 0 and isinstance(item[8][0][0], (int, float)):
+            correct_index = int(item[8][0][0])
+    if correct_index == -1 and len(item) > 9 and isinstance(item[9], list) and len(item[9]) > 0:
         if isinstance(item[9][0], (int, float)):
-            correct_answer_index = int(item[9][0])
-    
-    # If no correct answer found, default to first option
-    if correct_answer_index < 0 or correct_answer_index >= len(options):
-        correct_answer_index = 0
-    
+            correct_index = int(item[9][0])
+
+    if correct_index < 0 or correct_index >= len(options):
+        correct_index = 0
     if not options:
         return None
-    
     return {
         'text': question_text.strip(),
         'options': options,
-        'correct_answer_index': correct_answer_index
+        'correct_answer_index': correct_index
     }
 
 def parse_alternative(data):
-    """Alternative parsing method for different Google Forms structure"""
     questions = []
-    
     def traverse(obj, depth=0):
         if depth > 10:
             return
-        
         if isinstance(obj, list):
             for item in obj:
                 if isinstance(item, list) and len(item) >= 3:
                     has_options = any(isinstance(x, list) and len(x) > 0 and isinstance(x[0], str) for x in item)
                     has_text = any(isinstance(x, str) and len(x) > 10 for x in item)
-                    
                     if has_options and has_text:
-                        question_text = ""
+                        q_text = ""
                         for elem in item:
                             if isinstance(elem, str) and len(elem) > 10 and "?" in elem:
-                                question_text = elem
+                                q_text = elem
                                 break
-                        
-                        options = []
+                        opts = []
                         correct_idx = -1
                         for idx, elem in enumerate(item):
                             if isinstance(elem, list) and len(elem) > 0:
                                 for opt in elem:
-                                    if isinstance(opt, str) and len(opt) > 0 and opt not in options:
-                                        options.append(opt)
-                                if idx + 1 < len(item) and isinstance(item[idx + 1], list) and len(item[idx + 1]) > 0:
-                                    corr = item[idx + 1]
-                                    if isinstance(corr[0], (int, float)):
-                                        correct_idx = int(corr[0])
-                        
-                        if question_text and options and correct_idx >= 0:
+                                    if isinstance(opt, str) and opt not in opts:
+                                        opts.append(opt)
+                                if idx+1 < len(item) and isinstance(item[idx+1], list) and len(item[idx+1]) > 0:
+                                    if isinstance(item[idx+1][0], (int, float)):
+                                        correct_idx = int(item[idx+1][0])
+                        if q_text and opts and correct_idx >= 0:
                             questions.append({
-                                'text': question_text.strip(),
-                                'options': options,
+                                'text': q_text.strip(),
+                                'options': opts,
                                 'correct_answer_index': correct_idx
                             })
-                traverse(item, depth + 1)
+                traverse(item, depth+1)
         elif isinstance(obj, dict):
-            for value in obj.values():
-                traverse(value, depth + 1)
-    
+            for val in obj.values():
+                traverse(val, depth+1)
     traverse(data)
     return questions
